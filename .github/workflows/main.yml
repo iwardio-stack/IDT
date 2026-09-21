@@ -22,47 +22,28 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Locate Android SDK
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Find Android SDK manager
         shell: bash
         run: |
-          SDKMANAGER=""
-
-          for path in \
-            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "$ANDROID_HOME/cmdline-tools/bin/sdkmanager" \
-            "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager"
-          do
-            if [ -f "$path" ]; then
-              SDKMANAGER="$path"
-              break
-            fi
-          done
+          SDKMANAGER=$(find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | head -n 1)
 
           if [ -z "$SDKMANAGER" ]; then
-            SDKMANAGER=$(find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | head -n 1)
-          fi
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: Android SDK manager not found"
+            echo "ERROR: sdkmanager not found"
             exit 1
           fi
 
-          chmod +x "$SDKMANAGER"
-
-          SDK_DIR=$(dirname "$(dirname "$(dirname "$SDKMANAGER")")")
-
+          echo "SDK manager found at: $SDKMANAGER"
           echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
-
-          echo "Android SDK found:"
-          echo "$SDKMANAGER"
 
       - name: Install Android SDK packages
         shell: bash
         run: |
-          yes | "$SDKMANAGER" --licenses || true
+          bash "$SDKMANAGER" --licenses || true
 
-          "$SDKMANAGER" \
+          bash "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
@@ -71,20 +52,17 @@ jobs:
         shell: bash
         run: |
           wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip
-
           unzip -q gradle-8.9-bin.zip
-
           echo "$PWD/gradle-8.9/bin" >> "$GITHUB_PATH"
-
-          gradle --version
 
       - name: Find project ZIP
         shell: bash
         run: |
-          ZIP_FILE=$(find . -type f -iname "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -type f -iname "*.zip" \
+            ! -path "./gradle-8.9-bin.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No Android project ZIP found"
+            echo "ERROR: Android project ZIP not found"
             exit 1
           fi
 
@@ -95,11 +73,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p extracted-project
-
           unzip -q "$ZIP_FILE" -d extracted-project
-
-          echo "Extracted files:"
-          find extracted-project -maxdepth 4 -type f | head -n 100
 
       - name: Find Android project folder
         shell: bash
@@ -116,28 +90,19 @@ jobs:
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-
-          echo "Android project folder: $PROJECT_DIR"
+          echo "Project found: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Build debug APK
         shell: bash
         run: |
           cd "$PROJECT_DIR"
-
-          gradle assembleDebug \
-            --no-daemon \
-            --stacktrace
+          gradle assembleDebug --no-daemon --stacktrace
 
       - name: Find generated APK
         shell: bash
         run: |
-          echo "Searching for APK files..."
-
-          find "$PROJECT_DIR" \
-            -type f \
-            -name "*.apk" \
-            -print
+          find "$PROJECT_DIR" -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
