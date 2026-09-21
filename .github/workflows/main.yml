@@ -7,6 +7,10 @@ on:
     branches:
       - main
 
+env:
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
 jobs:
   build:
     name: Build Android APK
@@ -22,28 +26,34 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Find Android SDK manager
+      - name: Check Android SDK
         shell: bash
         run: |
-          SDKMANAGER=$(find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | head -n 1)
+          echo "Android SDK: $ANDROID_HOME"
+          ls -la "$ANDROID_HOME"
 
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found"
-            exit 1
-          fi
-
-          echo "SDK manager found at: $SDKMANAGER"
-          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          find "$ANDROID_HOME" \
+            -name sdkmanager \
+            -type f \
+            -print
 
       - name: Install Android SDK packages
         shell: bash
         run: |
-          bash "$SDKMANAGER" --licenses || true
+          SDKMANAGER=$(find "$ANDROID_HOME" \
+            -name sdkmanager \
+            -type f | head -n 1)
 
-          bash "$SDKMANAGER" \
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: SDK manager not found"
+            exit 1
+          fi
+
+          echo "Using: $SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
@@ -51,18 +61,26 @@ jobs:
       - name: Install Gradle 8.9
         shell: bash
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip
+          wget -q \
+            https://services.gradle.org/distributions/gradle-8.9-bin.zip
+
           unzip -q gradle-8.9-bin.zip
+
           echo "$PWD/gradle-8.9/bin" >> "$GITHUB_PATH"
+
+          gradle --version
 
       - name: Find project ZIP
         shell: bash
         run: |
-          ZIP_FILE=$(find . -type f -iname "*.zip" \
-            ! -path "./gradle-8.9-bin.zip" | head -n 1)
+          ZIP_FILE=$(find . \
+            -type f \
+            -iname "*.zip" \
+            ! -name "gradle-8.9-bin.zip" \
+            | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Android project ZIP not found"
+            echo "ERROR: Project ZIP not found"
             exit 1
           fi
 
@@ -73,15 +91,19 @@ jobs:
         shell: bash
         run: |
           mkdir -p extracted-project
+
           unzip -q "$ZIP_FILE" -d extracted-project
+
+          echo "Project files:"
+          find extracted-project -maxdepth 4 -type f | head -n 100
 
       - name: Find Android project folder
         shell: bash
         run: |
-          SETTINGS_FILE=$(find extracted-project -type f \( \
-            -name "settings.gradle" \
-            -o -name "settings.gradle.kts" \
-          \) | head -n 1)
+          SETTINGS_FILE=$(find extracted-project \
+            -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            | head -n 1)
 
           if [ -z "$SETTINGS_FILE" ]; then
             echo "ERROR: settings.gradle not found"
@@ -90,19 +112,26 @@ jobs:
           fi
 
           PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-          echo "Project found: $PROJECT_DIR"
+
+          echo "Project folder: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Build debug APK
         shell: bash
         run: |
           cd "$PROJECT_DIR"
-          gradle assembleDebug --no-daemon --stacktrace
 
-      - name: Find generated APK
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Locate APK
         shell: bash
         run: |
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
+          find "$PROJECT_DIR" \
+            -type f \
+            -name "*.apk" \
+            -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
