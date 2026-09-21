@@ -9,6 +9,7 @@ on:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -21,47 +22,127 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK packages
+      - name: Locate Android SDK
+        shell: bash
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          SDKMANAGER=""
+
+          for path in \
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "$ANDROID_HOME/cmdline-tools/bin/sdkmanager" \
+            "/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager"
+          do
+            if [ -f "$path" ]; then
+              SDKMANAGER="$path"
+              break
+            fi
+          done
+
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | head -n 1)
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: Android SDK manager not found"
+            exit 1
+          fi
+
+          chmod +x "$SDKMANAGER"
+
+          SDK_DIR=$(dirname "$(dirname "$(dirname "$SDKMANAGER")")")
+
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_DIR" >> "$GITHUB_ENV"
+
+          echo "Android SDK found:"
+          echo "$SDKMANAGER"
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Install Gradle 8.9
+        shell: bash
         run: |
-          wget https://services.gradle.org/distributions/gradle-8.9-bin.zip
+          wget -q https://services.gradle.org/distributions/gradle-8.9-bin.zip
+
           unzip -q gradle-8.9-bin.zip
+
           echo "$PWD/gradle-8.9/bin" >> "$GITHUB_PATH"
 
-      - name: Extract project
+          gradle --version
+
+      - name: Find project ZIP
+        shell: bash
         run: |
-          mkdir -p project
           ZIP_FILE=$(find . -type f -iname "*.zip" | head -n 1)
+
           if [ -z "$ZIP_FILE" ]; then
-            echo "No ZIP file found"
+            echo "ERROR: No Android project ZIP found"
             exit 1
           fi
-          unzip -q "$ZIP_FILE" -d project
 
-      - name: Find Android project
+          echo "ZIP found: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Extract Android project
+        shell: bash
         run: |
-          SETTINGS=$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1)
-          if [ -z "$SETTINGS" ]; then
-            echo "Android project not found"
-            find project -maxdepth 5 -type f
+          mkdir -p extracted-project
+
+          unzip -q "$ZIP_FILE" -d extracted-project
+
+          echo "Extracted files:"
+          find extracted-project -maxdepth 4 -type f | head -n 100
+
+      - name: Find Android project folder
+        shell: bash
+        run: |
+          SETTINGS_FILE=$(find extracted-project -type f \( \
+            -name "settings.gradle" \
+            -o -name "settings.gradle.kts" \
+          \) | head -n 1)
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: settings.gradle not found"
+            find extracted-project -type f
             exit 1
           fi
-          PROJECT_DIR=$(dirname "$SETTINGS")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Found project: $PROJECT_DIR"
 
-      - name: Build APK
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+
+          echo "Android project folder: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Build debug APK
+        shell: bash
         run: |
           cd "$PROJECT_DIR"
-          gradle assembleDebug --no-daemon
+
+          gradle assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Find generated APK
+        shell: bash
+        run: |
+          echo "Searching for APK files..."
+
+          find "$PROJECT_DIR" \
+            -type f \
+            -name "*.apk" \
+            -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: IDT-debug-APK
           path: |
-            **/build/outputs/apk/**/*.apk
+            extracted-project/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
